@@ -4,10 +4,25 @@ export class ValidationError extends Error {
   status = 400;
 }
 
+export class ConflictError extends Error {
+  status = 409;
+}
+
 function requireRoom(store, roomId) {
   if (!store.rooms.some((room) => room.id === roomId)) {
     throw new ValidationError('Choose an existing room.');
   }
+}
+
+function findConflictingBooking(store, roomId, startTime, endTime) {
+  return store.bookings.find(
+    (booking) => booking.roomId === roomId && startTime < booking.endTime && endTime > booking.startTime
+  );
+}
+
+function formatBookingWindow(booking) {
+  const clock = (iso) => iso.slice(11, 16);
+  return `${booking.roomId} is already booked ${clock(booking.startTime)}-${clock(booking.endTime)} for "${booking.title}".`;
 }
 
 function parseTimestamp(value) {
@@ -48,6 +63,10 @@ export function createBooking(store, input) {
   const endTime = parseTimestamp(input.endTime);
   if (startTime >= endTime) {
     throw new ValidationError('End time must be after start time.');
+  }
+  const conflict = findConflictingBooking(store, input.roomId, startTime, endTime);
+  if (conflict) {
+    throw new ConflictError(formatBookingWindow(conflict));
   }
   const booking = {
     id: randomUUID(),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBooking, listBookings, ValidationError } from '../src/bookings.js';
+import { ConflictError, createBooking, listBookings, ValidationError } from '../src/bookings.js';
 import { createStore } from '../src/store.js';
 
 const validBooking = {
@@ -57,6 +57,86 @@ test('accepts a real leap day and millisecond timestamps', () => {
     ...validBooking, startTime: '2032-02-29T09:00:00.125Z', endTime: '2032-02-29T10:00:00.125Z',
   });
   assert.equal(booking.startTime, '2032-02-29T09:00:00.125Z');
+});
+
+test('rejects a booking that strictly overlaps an existing booking on the same room', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects a booking that fully contains an existing booking on the same room', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T08:30:00Z', endTime: '2030-06-12T10:30:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('a conflict names the blocking booking time range and title, without the organizer', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  try {
+    createBooking(store, { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' });
+    assert.fail('expected a ConflictError');
+  } catch (error) {
+    assert.ok(error instanceof ConflictError);
+    assert.equal(error.status, 409);
+    assert.equal(error.message, 'cedar is already booked 09:00-10:00 for "Product brainstorm".');
+    assert.doesNotMatch(error.message, /Alex Morgan/);
+  }
+});
+
+test('a booking starting exactly when another ends is not a conflict (back-to-back allowed)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const next = createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(next.startTime, '2030-06-12T10:00:00.000Z');
+});
+
+test('a booking ending exactly when another starts is not a conflict (back-to-back allowed)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const before = createBooking(store, { ...validBooking, startTime: '2030-06-12T08:00:00Z', endTime: '2030-06-12T09:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(before.endTime, '2030-06-12T09:00:00.000Z');
+});
+
+test('an overlapping window for a different room is not a conflict', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const other = createBooking(store, { ...validBooking, roomId: 'maple' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(other.roomId, 'maple');
+});
+
+test('a multi-day candidate window is checked with the same overlap rule, no special-casing', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T23:00:00Z', endTime: '2030-06-14T00:00:00Z' });
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-13T12:00:00Z', endTime: '2030-06-13T13:00:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('when a candidate overlaps more than one booking, only the first in creation order is named', () => {
+  const store = createStore();
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T10:00:00Z', title: 'First meeting' });
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:30:00Z', endTime: '2030-06-12T11:30:00Z', title: 'Second meeting' });
+  try {
+    createBooking(store, { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T11:00:00Z' });
+    assert.fail('expected a ConflictError');
+  } catch (error) {
+    assert.match(error.message, /First meeting/);
+  }
 });
 
 const invalidInputs = [
