@@ -24,9 +24,26 @@ function RoomSketch({ capacity }) {
   );
 }
 
-function BookingForm({ room, date, onBooked }) {
+export function findOverlapHint(bookings, roomId, startTime, endTime, date) {
+  if (!startTime || !endTime) return null;
+  const newStart = `${date}T${startTime}:00Z`;
+  const newEnd = `${date}T${endTime}:00Z`;
+  if (newEnd <= newStart) return null;
+  return bookings.find(
+    (booking) => booking.roomId === roomId && newStart < booking.endTime && newEnd > booking.startTime
+  ) ?? null;
+}
+
+export function formatOverlapHint(booking) {
+  return `${booking.roomId} is already booked ${timeLabel(booking.startTime)}-${timeLabel(booking.endTime)} for "${booking.title}".`;
+}
+
+export function BookingForm({ room, date, bookings, onBooked }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('10:00');
+  const hint = findOverlapHint(bookings, room.id, startTime, endTime, date);
 
   async function submit(event) {
     event.preventDefault();
@@ -42,11 +59,13 @@ function BookingForm({ room, date, onBooked }) {
           roomId: room.id,
           title: fields.get('title'),
           organizer: fields.get('organizer'),
-          startTime: `${date}T${fields.get('startTime')}:00Z`,
-          endTime: `${date}T${fields.get('endTime')}:00Z`,
+          startTime: `${date}T${startTime}:00Z`,
+          endTime: `${date}T${endTime}:00Z`,
         }),
       });
       form.reset();
+      setStartTime('09:00');
+      setEndTime('10:00');
       onBooked(booking);
     } catch (error) {
       setError(error.message);
@@ -76,13 +95,34 @@ function BookingForm({ room, date, onBooked }) {
           <div className="grid grid-cols-2 gap-3">
             <label className="field-label">
               Start time
-              <input name="startTime" type="time" defaultValue="09:00" step="60" required />
+              <input
+                name="startTime"
+                type="time"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+                step="60"
+                required
+                data-testid="booking-form-start-time"
+              />
             </label>
             <label className="field-label">
               End time
-              <input name="endTime" type="time" defaultValue="10:00" step="60" required />
+              <input
+                name="endTime"
+                type="time"
+                value={endTime}
+                onChange={(event) => setEndTime(event.target.value)}
+                step="60"
+                required
+                data-testid="booking-form-end-time"
+              />
             </label>
           </div>
+          {hint && (
+            <p role="status" className="rounded-xl bg-white p-3 text-sm text-amber-800" data-testid="booking-form-overlap-hint">
+              {formatOverlapHint(hint)}
+            </p>
+          )}
           {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
           <button className="book-button" type="submit">
             {saving ? 'Booking…' : 'Confirm booking'} <span aria-hidden="true">↗</span>
@@ -252,7 +292,7 @@ export default function App() {
                   </ul>
                 )}
           </div>
-          {room && <BookingForm key={`${roomId}-${date}`} room={room} date={date} onBooked={(booking) => {
+          {room && <BookingForm key={`${roomId}-${date}`} room={room} date={date} bookings={bookings} onBooked={(booking) => {
             setNotice({ roomId: booking.roomId, date: booking.startTime.slice(0, 10), message: `“${booking.title}” booked in ${room.name}.` });
             setRevision((value) => value + 1);
           }} />}
