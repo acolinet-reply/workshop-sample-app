@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBooking, listBookings, ValidationError } from '../src/bookings.js';
+import { createBooking, listBookings, ValidationError, ConflictError } from '../src/bookings.js';
 import { createStore } from '../src/store.js';
 
 const validBooking = {
@@ -96,4 +96,88 @@ for (const date of [undefined, '', '2030-2-1', '2030-02-30', 'not-a-date']) {
 
 test('rejects an unknown room filter', () => {
   assert.throws(() => listBookings(createStore(), 'missing', '2030-06-12'), ValidationError);
+});
+
+test('allows back-to-back bookings (adjacent times)', () => {
+  const store = createStore();
+  const first = createBooking(store, validBooking);
+  const second = createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(second.id, store.bookings[1].id);
+});
+
+test('rejects overlapping booking at same time', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(
+    () => createBooking(store, validBooking),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects overlapping booking (partial overlap start)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const conflict = { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' };
+  assert.throws(() => createBooking(store, conflict), ConflictError);
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects overlapping booking (partial overlap end)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const conflict = { ...validBooking, startTime: '2030-06-12T08:30:00Z', endTime: '2030-06-12T09:30:00Z' };
+  assert.throws(() => createBooking(store, conflict), ConflictError);
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects overlapping booking (contained)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const conflict = { ...validBooking, startTime: '2030-06-12T09:15:00Z', endTime: '2030-06-12T09:45:00Z' };
+  assert.throws(() => createBooking(store, conflict), ConflictError);
+  assert.equal(store.bookings.length, 1);
+});
+
+test('rejects overlapping booking (contains)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const conflict = { ...validBooking, startTime: '2030-06-12T08:00:00Z', endTime: '2030-06-12T11:00:00Z' };
+  assert.throws(() => createBooking(store, conflict), ConflictError);
+  assert.equal(store.bookings.length, 1);
+});
+
+test('conflict error includes conflicting booking details', () => {
+  const store = createStore();
+  const existing = createBooking(store, validBooking);
+  const conflict = { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' };
+  let error;
+  try {
+    createBooking(store, conflict);
+  } catch (e) {
+    error = e;
+  }
+  assert(error instanceof ConflictError);
+  assert.equal(error.conflictingBooking.id, existing.id);
+  assert.equal(error.conflictingBooking.title, existing.title);
+  assert.equal(error.conflictingBooking.organizer, existing.organizer);
+  assert.equal(error.conflictingBooking.startTime, existing.startTime);
+  assert.equal(error.conflictingBooking.endTime, existing.endTime);
+});
+
+test('allows overlapping bookings in different rooms', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const other = createBooking(store, { ...validBooking, roomId: 'maple' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(other.roomId, 'maple');
+});
+
+test('allows non-overlapping bookings in same room', () => {
+  const store = createStore();
+  const first = createBooking(store, validBooking);
+  const second = createBooking(store, { ...validBooking, startTime: '2030-06-12T14:00:00Z', endTime: '2030-06-12T15:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(first.roomId, second.roomId);
 });

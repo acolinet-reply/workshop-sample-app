@@ -118,3 +118,47 @@ test('routes remain case-sensitive, exact, and limited to their supported method
   assert.equal(response.status, 405);
   assert.equal(response.headers.get('allow'), 'GET');
 });
+
+test('API rejects overlapping booking with 409 Conflict', async (t) => {
+  const request = await setup(t);
+  const first = await request('/api/bookings', post(booking));
+  assert.equal(first.status, 201);
+  const second = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }));
+  assert.equal(second.status, 409);
+  const body = await second.json();
+  assert.equal(body.error, 'This time slot overlaps with an existing booking.');
+  assert.equal(body.conflict.title, booking.title);
+  assert.equal(body.conflict.organizer, booking.organizer);
+  assert.equal(body.conflict.startTime, '2030-06-12T09:00:00.000Z');
+  assert.equal(body.conflict.endTime, '2030-06-12T10:00:00.000Z');
+});
+
+test('API allows back-to-back bookings', async (t) => {
+  const request = await setup(t);
+  const first = await request('/api/bookings', post(booking));
+  assert.equal(first.status, 201);
+  const second = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' }));
+  assert.equal(second.status, 201);
+  const listed = await request('/api/bookings?roomId=cedar&date=2030-06-12');
+  assert.equal((await listed.json()).length, 2);
+});
+
+test('API allows overlapping time in different rooms', async (t) => {
+  const request = await setup(t);
+  const first = await request('/api/bookings', post(booking));
+  assert.equal(first.status, 201);
+  const second = await request('/api/bookings', post({ ...booking, roomId: 'maple' }));
+  assert.equal(second.status, 201);
+  assert.equal((await (await request('/api/bookings?roomId=cedar&date=2030-06-12')).json()).length, 1);
+  assert.equal((await (await request('/api/bookings?roomId=maple&date=2030-06-12')).json()).length, 1);
+});
+
+test('conflict response includes only conflict details, not full booking record', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const response = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }));
+  const body = await response.json();
+  assert.equal(typeof body.conflict.id, 'undefined');
+  assert.equal(typeof body.conflict.roomId, 'undefined');
+  assert.equal(Object.keys(body.conflict).length, 4);
+});

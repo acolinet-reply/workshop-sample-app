@@ -4,10 +4,28 @@ export class ValidationError extends Error {
   status = 400;
 }
 
+export class ConflictError extends Error {
+  status = 409;
+  constructor(message, conflictingBooking) {
+    super(message);
+    this.conflictingBooking = conflictingBooking;
+  }
+}
+
 function requireRoom(store, roomId) {
   if (!store.rooms.some((room) => room.id === roomId)) {
     throw new ValidationError('Choose an existing room.');
   }
+}
+
+function hasOverlap(booking1, booking2) {
+  return booking1.startTime < booking2.endTime && booking1.endTime > booking2.startTime;
+}
+
+function findConflictingBooking(store, roomId, startTime, endTime) {
+  return store.bookings.find((booking) => {
+    return booking.roomId === roomId && hasOverlap({ startTime, endTime }, booking);
+  });
 }
 
 function parseTimestamp(value) {
@@ -48,6 +66,10 @@ export function createBooking(store, input) {
   const endTime = parseTimestamp(input.endTime);
   if (startTime >= endTime) {
     throw new ValidationError('End time must be after start time.');
+  }
+  const conflicting = findConflictingBooking(store, input.roomId, startTime, endTime);
+  if (conflicting) {
+    throw new ConflictError('This time slot overlaps with an existing booking.', conflicting);
   }
   const booking = {
     id: randomUUID(),
