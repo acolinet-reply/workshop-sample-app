@@ -6,10 +6,25 @@ const dateLabel = (value) => new Date(`${value}T12:00:00Z`).toLocaleDateString('
   weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
 });
 
+function hasOverlap(booking1, booking2) {
+  return booking1.startTime < booking2.endTime && booking1.endTime > booking2.startTime;
+}
+
+function findConflictingBooking(existingBookings, proposedStartTime, proposedEndTime) {
+  return existingBookings.find((booking) => {
+    return hasOverlap({ startTime: proposedStartTime, endTime: proposedEndTime }, booking);
+  });
+}
+
 async function api(path, options) {
   const response = await fetch(`/api${path}`, options);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? 'Unable to complete the request.');
+  if (!response.ok) {
+    const error = new Error(body.error ?? 'Unable to complete the request.');
+    error.status = response.status;
+    error.conflict = body.conflict;
+    throw error;
+  }
   return body;
 }
 
@@ -24,9 +39,17 @@ function RoomSketch({ capacity }) {
   );
 }
 
-function BookingForm({ room, date, onBooked }) {
+function BookingForm({ room, date, onBooked, existingBookings = [] }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [conflict, setConflict] = useState(null);
+
+  function checkForConflict(startTimeStr, endTimeStr) {
+    const startTime = `${date}T${startTimeStr}:00Z`;
+    const endTime = `${date}T${endTimeStr}:00Z`;
+    const conflicting = findConflictingBooking(existingBookings, startTime, endTime);
+    setConflict(conflicting || null);
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -47,13 +70,21 @@ function BookingForm({ room, date, onBooked }) {
         }),
       });
       form.reset();
+      setConflict(null);
       onBooked(booking);
     } catch (error) {
-      setError(error.message);
+      let message = error.message;
+      if (error.status === 409 && error.conflict) {
+        const { title, organizer, startTime, endTime } = error.conflict;
+        message = `${message} ${title} by ${organizer} from ${timeLabel(startTime)}–${timeLabel(endTime)}.`;
+      }
+      setError(message);
     } finally {
       setSaving(false);
     }
   }
+
+  const isConflicted = conflict !== null;
 
   return (
     <aside className="booking-panel">
@@ -64,27 +95,40 @@ function BookingForm({ room, date, onBooked }) {
       <h2 className="mt-6 text-3xl tracking-tight">Book {room.name}.</h2>
       <p className="mt-2 text-sm text-white/70">{dateLabel(date)} · Up to {room.capacity} people</p>
       <form onSubmit={submit} className="mt-8 space-y-5">
-        <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
+        <fieldset disabled={saving || isConflicted} className="space-y-5 disabled:opacity-60">
           <label className="field-label">
             Meeting title
-            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} />
+            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} data-testid="booking-form-title" />
           </label>
           <label className="field-label">
             Organizer
-            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" />
+            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" data-testid="booking-form-organizer" />
           </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field-label">
               Start time
-              <input name="startTime" type="time" defaultValue="09:00" step="60" required />
+              <input name="startTime" type="time" defaultValue="09:00" step="60" required data-testid="booking-form-start-time"
+                onChange={(e) => {
+                  const endTimeInput = e.currentTarget.form?.elements['endTime'];
+                  if (endTimeInput) checkForConflict(e.currentTarget.value, endTimeInput.value);
+                }} />
             </label>
             <label className="field-label">
               End time
-              <input name="endTime" type="time" defaultValue="10:00" step="60" required />
+              <input name="endTime" type="time" defaultValue="10:00" step="60" required data-testid="booking-form-end-time"
+                onChange={(e) => {
+                  const startTimeInput = e.currentTarget.form?.elements['startTime'];
+                  if (startTimeInput) checkForConflict(startTimeInput.value, e.currentTarget.value);
+                }} />
             </label>
           </div>
-          {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
-          <button className="book-button" type="submit">
+          {isConflicted && (
+            <p role="alert" className="rounded-xl bg-yellow-100 p-3 text-sm text-yellow-800" data-testid="booking-form-conflict-warning">
+              Conflicts with {conflict.title} by {conflict.organizer} from {timeLabel(conflict.startTime)}–{timeLabel(conflict.endTime)}.
+            </p>
+          )}
+          {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800" data-testid="booking-form-error">{error}</p>}
+          <button className="book-button" type="submit" disabled={isConflicted} data-testid="booking-form-submit">
             {saving ? 'Booking…' : 'Confirm booking'} <span aria-hidden="true">↗</span>
           </button>
         </fieldset>
@@ -252,8 +296,8 @@ export default function App() {
                   </ul>
                 )}
           </div>
-          {room && <BookingForm key={`${roomId}-${date}`} room={room} date={date} onBooked={(booking) => {
-            setNotice({ roomId: booking.roomId, date: booking.startTime.slice(0, 10), message: `“${booking.title}” booked in ${room.name}.` });
+          {room && <BookingForm key={`${roomId}-${date}`} room={room} date={date} existingBookings={bookings} onBooked={(booking) => {
+            setNotice({ roomId: booking.roomId, date: booking.startTime.slice(0, 10), message: `”${booking.title}” booked in ${room.name}.` });
             setRevision((value) => value + 1);
           }} />}
         </section>
